@@ -310,17 +310,18 @@ struct PylontechCANSMACapacityFrameStruct {
 /*
  * Frame for total capacity for Luxpower - SNA inverters
  * Description was found in: https://github.com/dfch/BydCanProtocol/tree/main
+ * and also here https://github.com/Uksa007/esphome-jk-bms-can/blob/main/esp32-example-can.yaml line 307
  */
 struct PylontechCANLuxpowerCapacityFrameStruct {
-    struct PylontechCANFrameInfoStruct PylontechCANFrameInfo = { PYLON_CAN_BATTERY_LUXPOWER_CAPACITY_FRAME_ID, 8 }; // 0x379
+    struct PylontechCANFrameInfoStruct PylontechCANFrameInfo = { PYLON_CAN_BATTERY_SPECIFICATIONS_FRAME_ID, 2 }; // 0x379
     struct {
-        uint16_t CapacityAmpereHour;
-        uint16_t Unknown1;
-        uint32_t Unknown2;
+        uint16_t CapacityAmpereHourLowByte;
+        uint16_t CapacityAmpereHourHighByte;
     } FrameData;
     void fillFrame(struct JKReplyStruct *aJKFAllReply) {
         (void) aJKFAllReply; // To avoid [-Wunused-parameter] warning
-        FrameData.CapacityAmpereHour = JKComputedData.TotalCapacityAmpereHour;
+        FrameData.CapacityAmpereHourLowByte = lowByte(JKComputedData.TotalCapacityAmpereHour);
+        FrameData.CapacityAmpereHourHighByte = highByte(JKComputedData.TotalCapacityAmpereHour);
     }
 };
 #endif // _PYLONTECH_CAN_H
