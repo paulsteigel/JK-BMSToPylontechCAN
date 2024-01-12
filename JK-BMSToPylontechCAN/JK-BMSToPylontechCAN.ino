@@ -106,6 +106,30 @@ const uint8_t sSOCThresholdForForceCharge = SOC_THRESHOLD_FOR_FORCE_CHARGE_REQUE
 
 #define VERSION_EXAMPLE "2.3.0"
 
+// For controlling charge scheme
+const uint8_t CHARGE_PHASE_1 = 45;            // 45 minutes warming up, charging current will go up in linear mode
+const uint8_t CHARGE_PHASE_3 = 45;            // 45 minutes warming up, charging current will go down gradually in linear mode
+//#define SOC_END_CONSTANT_CURRENT  80        // milestone for changing charging scheme
+#define CHARGING_CURRENT_PER_CAPACITY 3       // to be three tenth of capacity
+#define MAX_SOC_BULK_CHARGE_THRESHOLD_PERCENT 95 // SOC Level to move to absorption mode
+
+const uint8_t CHARGE_RATIO = 60L;
+const uint32_t MOMENTARY_CHARGE_DURATION = (2L * CHARGE_RATIO * 1000L);       // if charge is continuing in this duration, the main charging sequense started
+const uint32_t CHARGE_STATUS_REFRESH_INTERVAL = (1L * CHARGE_RATIO * 1000L);  // interval for refreshing charge status
+
+//bool IsCharging = false;            // Keep state of charging one getcurrent return positive
+//uint16_t Max_Charge_Current_100_milliAmp;   // keep peak charging current during warm up for stabilising
+uint16_t Computed_Current_limits_100mA;      // tính giới hạn dòng
+uint16_t Charge_Current_100_milliAmp;
+uint32_t StartChargeTime = 0;                // Store starting time for charge
+uint32_t LastCheckTime = 0;                  // Record time count for each charging check
+uint8_t ChargePhase = 0;                     // Charging phase (1CC,2CC,3CV)
+uint8_t MinuteCount = 0; // counting minutes for charge
+uint8_t ChargeTryEffort = 0;                 // Count of Charge try when battery is full for stopping the charge action from Inverter
+#define MAX_CYCLES_LFP 6000.0 //Maximum charging cycles is used to calculate the battey SOH, LF280K=6000.0 LF280=3000.0 (decimal is required)
+#define MAX_CYCLES_LF 3000.0 
+// End of controlling charge scheme
+
 /*
  * Pin layout, may be adapted to your requirements
  */
