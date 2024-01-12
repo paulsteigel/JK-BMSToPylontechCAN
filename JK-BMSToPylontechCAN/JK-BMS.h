@@ -70,6 +70,8 @@ extern bool sUpTimeStringMinuteHasChanged;
 
 int16_t getJKTemperature(uint16_t aJKRAWTemperature);
 int16_t getCurrent(uint16_t aJKRAWCurrent);
+//added for fake soc map to volt
+uint16_t getMappedSOC(uint16_t AverageRefVoltage);
 
 uint8_t swap(uint8_t aByte);
 uint16_t swap(uint16_t aWordToSwapBytes);
@@ -163,6 +165,13 @@ struct JKComputedDataStruct {
     float BatteryLoadCurrentFloat;      // Ampere
     int16_t BatteryLoadPower;           // Watt Computed value, Charging is positive discharging is negative
     bool BMSIsStarting;                 // True if SOC and Cycles are both 0, for around 16 seconds during JK-BMS startup.
+    //added by Ngoc
+    uint8_t ActualNumberOfCellInfoEntries;     // Use for computation of the fake SOC 
+    uint8_t BatteryType;                // retaining battery 
+    uint16_t MinimumCellMillivolt;      // To report Inverter on the data
+    uint16_t MaximumCellMillivolt;      // To report Inverter on the data
+    uint8_t SOCPercent;                 // To report mapped SOC
+    uint16_t Cycles;                    // To report total cycle of the batteries
 };
 
 /*
