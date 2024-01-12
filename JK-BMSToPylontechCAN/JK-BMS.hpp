@@ -82,6 +82,16 @@ const char CellUndervoltage[] PROGMEM = "Cell undervoltage";                // B
 const char _309AProtection[] PROGMEM = "309_A protection";                  // Byte 1.4,
 const char _309BProtection[] PROGMEM = "309_B protection";                  // Byte 1.5,
 
+//added by Ngoc for fake map from volt to SOC
+#define LFP_LEN 15
+#define LION_LEN 21
+
+uint8_t MapSOCLFP[LFP_LEN] = {0, 1, 5, 10, 14, 20, 30, 40, 50, 60, 70, 80, 90, 99, 100}; // array to keep SOC level
+uint8_t MapSOCLion[LION_LEN] = {0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100};
+uint16_t MapVoltLFP[LFP_LEN] = {2500, 2538, 2800, 3000, 3150, 3200, 3225, 3250, 3263, 3275, 3300, 3325, 3350, 3375, 3450}; // Keep Cell milivolt for LFP mapping
+uint16_t MapVoltLion[LION_LEN] = {3000, 3062, 3123, 3177, 3238, 3300, 3362, 3423, 3477, 3538, 3600, 3662, 3723, 3777, 3838, 3900, 3962, 4023, 4077, 4138, 4200};
+
+
 const char *const JK_BMSErrorStringsArray[NUMBER_OF_DEFINED_ALARM_BITS] PROGMEM = { lowCapacity, MosFetOvertemperature,
         chargingOvervoltage, dischargingUndervoltage, Sensor2Overtemperature, chargingOvercurrent, dischargingOvercurrent,
         CellVoltageDifference, Sensor1Overtemperature, Sensor2LowLemperature, CellOvervoltage, CellUndervoltage, _309AProtection,
@@ -314,6 +324,59 @@ void myPrintlnSwap(const __FlashStringHelper *aPGMString, uint32_t a32BitValue) 
 }
 
 /*
+ * Due to wrong SOC calculation of JKBMS that caused inverter to work incorrectly, I make this mapping of SOC based on voltage
+ * As this is not good at all but it would be helpful for helping user.
+ * Sets SOCPercent to the mapped one 
+ */
+uint16_t getMappedSOC(uint16_t AverageRefVoltage){
+  uint16_t RefVoltage = 0;
+  uint16_t *pMapVol;
+  uint8_t *pMapSOC;
+  uint8_t fakeSoc;
+  uint8_t arrLength;    
+
+  if (JKComputedData.BatteryType == 0) {
+    //Serial.println(F("<<<LFP battery>>>"));
+    arrLength=LFP_LEN;
+    pMapVol = MapVoltLFP;
+    pMapSOC = MapSOCLFP;
+    
+  }else if (JKComputedData.BatteryType == 1) {
+    //Serial.println(F("<<<Lion battery>>>"));
+    arrLength=LION_LEN;
+    pMapVol = MapVoltLion;
+    pMapSOC = MapSOCLion;    
+  }
+  if (JKComputedData.BatteryLoadCurrentFloat > 0){
+    // While charging, charged voltage is about greater than opened circuit, minimum voltage should be referred, even the difference is not much
+    RefVoltage = AverageRefVoltage;//MinRefVoltage;
+  }else{
+    RefVoltage = AverageRefVoltage;
+  }
+  for (uint8_t ptr = 3; ptr < arrLength; ptr++){ //Stop at 80%    
+    if(RefVoltage >= *(pMapVol + ptr) && RefVoltage <= *(pMapVol + ptr +1)){
+      fakeSoc = map(RefVoltage, *(pMapVol + ptr), *(pMapVol + ptr + 1), *(pMapSOC +ptr), *(pMapSOC + ptr + 1));
+      /*
+      Serial.println(F("Battery Type:"));
+      Serial.print(JKComputedData.BatteryType,HEX);
+      Serial.println(F("Voltage"));
+      Serial.print(AverageRefVoltage);
+      Serial.print(F("/"));
+      Serial.print(*(pMapVol + ptr));
+      Serial.print(F("->"));
+      Serial.print(*(pMapVol + ptr + 1));
+      Serial.print(F("||"));
+      Serial.print(F("Fake SOC:"));
+      Serial.println(fakeSoc);     
+      */
+      return fakeSoc;
+    }
+  }
+  Serial.println(F("No map returned!!"));
+  return 20;
+}
+
+/*
  * Convert the big endian cell voltage data from JKReplyFrameBuffer to little endian data in JKConvertedCellInfo
  * and compute minimum, maximum, delta, and average
  */
@@ -503,6 +566,16 @@ void fillJKComputedData() {
 //    Serial.println(JKComputedData.BatteryLoadCurrentFloat);
 
     JKComputedData.BatteryLoadPower = JKComputedData.BatteryVoltageFloat * JKComputedData.BatteryLoadCurrentFloat;
+
+// added by Ngoc for sending cell max/min volt to Luxpower
+    JKComputedData.BatteryType = sJKFAllReplyPointer->BatteryType; 
+    JKComputedData.MinimumCellMillivolt = JKConvertedCellInfo.MinimumCellMillivolt;
+    JKComputedData.MaximumCellMillivolt = JKConvertedCellInfo.MaximumCellMillivolt;
+// For calculating Fake SOC
+    JKComputedData.AverageCellMillivolt = JKConvertedCellInfo.AverageCellMillivolt;
+    JKComputedData.ActualNumberOfCellInfoEntries = JKConvertedCellInfo.ActualNumberOfCellInfoEntries;
+    JKComputedData.SOCPercent = getMappedSOC(JKConvertedCellInfo.AverageCellMillivolt);
+        
 
     if (sJKFAllReplyPointer->BMSStatus.StatusBits.BalancerActive) {
         sBalancingCount++;
