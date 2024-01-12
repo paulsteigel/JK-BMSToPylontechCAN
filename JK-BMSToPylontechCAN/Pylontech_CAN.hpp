@@ -97,6 +97,7 @@ void printPylontechCANFrame(struct PylontechCANFrameStruct *aPylontechCANFrame) 
  */
 void sendPylontechAllCANFrames(bool aDebugModeActive) {
     if (aDebugModeActive) {
+        ControlChargeScheme(); //modify charge scheme
         printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANBatteryLimitsFrame));
         printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANSohSocFrame));
         printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCurrentValuesFrame));
@@ -107,7 +108,18 @@ void sendPylontechAllCANFrames(bool aDebugModeActive) {
 #if defined(SMA_EXTENSIONS)
         printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANSpecificationsFrame));
 #endif
+#if defined(LUXPOWER_EXTENSIONS)
+    //sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANBatInfoFrame));
+    //sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCellInfoFrame));
+    //sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCellMinVoltageNameFrame));
+    //sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCellMaxVoltageNameFrame));
+    sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANLuxpowerCapacityFrame));
+    sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANSMACapacityFrame));
+    sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCellInfoFrame));
+    //sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANBatteryInfoFrame));
+#endif
     }
+    ControlChargeScheme(); //modify charge scheme
     sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANBatteryLimitsFrame));
     sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANSohSocFrame));
     sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCurrentValuesFrame));
@@ -118,6 +130,163 @@ void sendPylontechAllCANFrames(bool aDebugModeActive) {
 #if defined(SMA_EXTENSIONS)
     sendPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANSpecificationsFrame));
 #endif
+#if defined(LUXPOWER_EXTENSIONS)        
+    //printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANBatInfoFrame));
+    //printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCellInfoFrame));
+    //printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCellMinVoltageNameFrame));
+    //printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCellMaxVoltageNameFrame));
+    printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANLuxpowerCapacityFrame));
+    printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANSMACapacityFrame));  
+    printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANCellInfoFrame));  
+    //printPylontechCANFrame(reinterpret_cast<struct PylontechCANFrameStruct*>(&PylontechCANBatteryInfoFrame));     
+#endif  
+}
+
+/* This part is for controlling the charge scheme 
+ * following CCCV method
+ * 1.Warm-up in about 40 minutes; 2. Constant current till certain voltage or SOC;
+ * 3.Constant Voltage with reduction of charging curent till SOC 100% or 3.40 V for LFP, 4.15 V for Lion (about 3h)
+ * Warmup 40 keep 160  cool-down 45 minutes
+*/
+ 
+void ControlChargeScheme(){
+  uint8_t ChargeStatusRef = 0;
+  uint16_t Local_Charge_Current_100_milliAmp;
+  
+  if (JKComputedData.BatteryLoadCurrentFloat > 0) {
+    ChargeStatusRef = ReachChargeLimit();
+    if (StartChargeTime == 0) {
+      if (ChargeStatusRef >= 1 && ChargeTryEffort > 2){
+          // Too much for now, request charging off        
+          ChargeTryEffort++;          
+          PylontechCANBatteryRequestFrame.FrameData.ChargeEnable = 0;
+          Serial.println(F("Setting charge to OFF:")); 
+          return;
+      }else{          
+          PylontechCANBatteryRequestFrame.FrameData.ChargeEnable = sJKFAllReplyPointer->BMSStatus.StatusBits.DischargeMosFetActive;
+      }
+      StartChargeTime = millis(); // Store starting time for charge
+      // Get the proper charging current: either BMS limit or using 0.3C
+      Computed_Current_limits_100mA = min(swap(sJKFAllReplyPointer->ChargeOvercurrentProtectionAmpere) * 10, 
+      JKComputedData.TotalCapacityAmpereHour * CHARGING_CURRENT_PER_CAPACITY);
+      Serial.print(F("Charging check: >Selected Current:")); Serial.println(Computed_Current_limits_100mA);   
+    }
+  } else {
+    resetCharge();
+    return;
+  }
+  
+  // Get into current charging phase  
+  if (StartChargeTime == 0) return; // No charging detected
+  // Allow this to be triggered once
+  if (ChargePhase == 0) {
+    if ((millis() - StartChargeTime) < MOMENTARY_CHARGE_DURATION) return;
+    // Charge started in more than MOMENTARY_CHARGE_DURATION, charging started, get into phase 1
+    //MinuteCount = MOMENTARY_CHARGE_DURATION / (CHARGE_RATIO * 1000L); // Marking the counter for warming up charge
+    MinuteCount = map(JKComputedData.BatteryLoadCurrentFloat * 10, 1, Computed_Current_limits_100mA, 0, CHARGE_PHASE_1) + 1;
+    ChargePhase = 1;
+    Serial.println(F("Enter phase 1:"));
+    Serial.print(MinuteCount);
+  }
+
+  // Check if end of phase 1, move to phase 2 or next 
+  if (ChargePhase == 1) {
+    if ((millis() - StartChargeTime) >= ((CHARGE_PHASE_1 + 1) * CHARGE_RATIO * 1000L)) {
+      ChargePhase = 2;
+      MinuteCount = 0; //reset the minute counter to enter phase 2
+      Serial.print(F("Enter phase 2:"));Serial.println(MinuteCount);
+    }    
+  } else if (ChargePhase == 2) {
+    //ChargeStatusRef = ReachChargeLimit();          
+    if (ChargeStatusRef == 1) {      
+      ChargePhase = 3;  
+      MinuteCount = 0; //reset the minute counter during phase 2
+    } else if (ChargeStatusRef == 2) {
+      // reducing current by 10%
+      Charge_Current_100_milliAmp = Charge_Current_100_milliAmp * 0.98;
+    }
+  }
+  
+  if ((millis() - LastCheckTime) < CHARGE_STATUS_REFRESH_INTERVAL) return;
+  LastCheckTime = millis(); //reset the counter for resuming the check
+  switch (ChargePhase) {
+  case 1:        
+    // Linear mapping of charging current until reaching 0.3C
+    Local_Charge_Current_100_milliAmp = map(MinuteCount, 0, CHARGE_PHASE_1, 1, Computed_Current_limits_100mA);    
+    Charge_Current_100_milliAmp = (Local_Charge_Current_100_milliAmp > Computed_Current_limits_100mA) ? Computed_Current_limits_100mA : Local_Charge_Current_100_milliAmp;
+    PylontechCANBatteryLimitsFrame.FrameData.BatteryChargeCurrentLimit100Milliampere = Charge_Current_100_milliAmp;
+    MinuteCount ++;
+    Serial.print(F("Charging phase 1: minute count::"));Serial.println(MinuteCount);
+    Serial.print(F("Applied charged current::"));
+    Serial.print(PylontechCANBatteryLimitsFrame.FrameData.BatteryChargeCurrentLimit100Milliampere);
+    Serial.print(F("/"));Serial.println(Computed_Current_limits_100mA); 
+
+    break;
+  case 2: 
+    // in this phase, do nothing to current at all
+    Serial.print(F("Charging phase 2: Minute count::"));Serial.println(MinuteCount);
+    Serial.print(F("Applied charged current::"));
+    Serial.print(Charge_Current_100_milliAmp);
+    Serial.print(F("/"));Serial.println(Computed_Current_limits_100mA);
+    MinuteCount ++;    
+    break;
+  case 3: 
+    //Keep charging till full or when the Inverter stop charging, need a new routine for this charging   
+    Serial.print(F("Charging phase 3: Minute count::"));Serial.println(MinuteCount);
+    MinuteCount ++;     
+    if (ChargeStatusRef != 2) Charge_Current_100_milliAmp = map(MinuteCount, 1, CHARGE_PHASE_3, Computed_Current_limits_100mA, 0);
+    PylontechCANBatteryLimitsFrame.FrameData.BatteryChargeCurrentLimit100Milliampere = Charge_Current_100_milliAmp;        
+    Serial.print(F("Applied charged current::"));
+    Serial.print(PylontechCANBatteryLimitsFrame.FrameData.BatteryChargeCurrentLimit100Milliampere);
+    Serial.print(F("/"));Serial.println(Computed_Current_limits_100mA); 
+
+    if (Charge_Current_100_milliAmp == 0) {
+      // tell the inverter to stop charging or keep it to maintain the charge
+      Serial.print(F("End of charge"));
+      resetCharge();
+    }
+    break;
+  default:
+    // statements
+    break;
+  }      
+}
+
+void resetCharge(){
+  Serial.println(F("Reset charging parameters"));
+  StartChargeTime = 0; // reset charge starting time
+  LastCheckTime = 0;
+  MinuteCount = 0;
+  ChargePhase = 0;
+  ChargeTryEffort = 0;    
+  // recover the charging limits
+  if (PylontechCANBatteryLimitsFrame.FrameData.BatteryChargeCurrentLimit100Milliampere != swap(sJKFAllReplyPointer->ChargeOvercurrentProtectionAmpere) * 10) {
+    PylontechCANBatteryLimitsFrame.FrameData.BatteryChargeCurrentLimit100Milliampere = swap(sJKFAllReplyPointer->ChargeOvercurrentProtectionAmpere) * 10;
+  }
+}
+
+uint8_t ReachChargeLimit(){ 
+  /* Status return: 
+   *  0: nothing; 
+   *  1: stop phase; 
+   *  2: reducing current 10%; 
+  */
+  //will do this check every 5 minutes
+  uint16_t Charge_MilliVolt_limit = 0;  
+  if ((millis() - LastCheckTime) < CHARGE_STATUS_REFRESH_INTERVAL) return 0;
+  // first check over voltage
+  if (JKComputedData.BatteryType == 0) {//LFP battery  
+    Charge_MilliVolt_limit = 3450;
+  } else if (JKComputedData.BatteryType == 1){ //Lithium ion       
+    Charge_MilliVolt_limit = 4200;  
+  }
+  // check SOC First
+  return (sJKFAllReplyPointer->SOCPercent >= MAX_SOC_BULK_CHARGE_THRESHOLD_PERCENT)? 1 : 0;   
+  Serial.print(F("Battery type:")); Serial.println(JKComputedData.BatteryType);
+  if ((JKComputedData.MaximumCellMillivolt * 1.02) > Charge_MilliVolt_limit) {
+    Serial.print(F("Status check::")); Serial.println((JKComputedData.MaximumCellMillivolt * 1.02) - Charge_MilliVolt_limit);    
+    return 2;  
+  }       
 }
 
 #if defined(LOCAL_DEBUG)
